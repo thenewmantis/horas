@@ -1,1 +1,169 @@
-/home/wilson/.local/bin/horas
+#!/usr/bin/python
+HELP_MSG = '''
+    Usage:
+        -h    show this help message and exit
+        -n    show when the noonday devil attacks today, i.e. from the
+              fourth hour to the eighth hour
+        -s    print only sunrise and sunset times for today
+        -t    print only the dawn and dusk times for today
+        -c    print the times of dawn and all twelve hours for today
+        -p    print today's prayer hours (Lauds, Prime, Terce, etc.)
+        -a    print everything for today. This is the default
+        -w    print times in 12-hour time instead of 24-hour
+              If any argument except -h or -w is capitalized,
+              data for the whole month will be returned'''
+ARGS_LIST = "ACNPSTachnopstw"
+DATE_FMT = "%Y-%m-%d"
+
+import json
+import re
+import os
+import urllib.request, urllib.error, urllib.parse
+from datetime import date
+from sys import argv
+from time import localtime, mktime, strftime, strptime
+
+CACHE_DIR =  (os.environ["XDG_CACHE_HOME"] if "XDG_CACHE_HOME" in os.environ else (os.environ["HOME"] + "/.cache")) + "/horas"
+DATA_FILE = CACHE_DIR + "/horas.json"
+TMP_DIR = (os.environ["TMPDIR"] if "TMPDIR" in os.environ else "/tmp") + "/horas"
+WEBPAGE = TMP_DIR + "/horas.html"
+
+
+def downloadData():
+    todayTime = date.today().timetuple()
+    print(f"Downloading sunlight times for Minneapolis, MN for the month of {strftime('%B %Y', todayTime)}...")
+    req = urllib.request.Request(
+            'https://sunrise-sunset.org/us/minneapolis-mn',
+            data=None,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.17 (KHTML, like Gecko) Chrome/24.0.1312.52 Safari/537.17'
+            }
+    )
+    with open(WEBPAGE, 'w') as file:
+        file.write(urllib.request.urlopen(req).read().decode('UTF-8'))
+    print('Download successful. Recording data as an object...')
+    recordData()
+
+def recordData():
+    TIME_RE = r"(1?\d:[0-5]\d):[0-5]\d( am| pm)"
+    DATE_RE = r"\d{4}-\d{2}-\d{2}"
+    days = []
+    with open(WEBPAGE, 'r') as file:
+        lastTimeFound=""
+        day = {}
+        getNext = False
+        for line in file:
+            if re.search("<td>", line):
+                if getNext:
+                    # This is dusk (the record right after sunset)
+                    match = re.search(TIME_RE, line)
+                    day['dusk'] = match[1] + match[2]
+                    getNext = False
+                    # One day down ...
+                    days.append(day)
+                    day = {}
+                elif re.search(r"Sunrise", line):
+                    day['date'] = re.search(DATE_RE, line)[0]
+                    # The record before sunrise is always dawn
+                    day['dawn'] = lastTimeFound
+                    match = re.search(TIME_RE, line)
+                    day['sunrise'] = match[1] + match[2]
+                elif re.search(r"Sunset", line):
+                    match = re.search(TIME_RE, line)
+                    day['sunset'] = match[1] + match[2]
+                    # Next record will be dusk
+                    getNext = True
+                else:
+                    match = re.search(TIME_RE, line)
+                    if match:
+                        lastTimeFound = match[1] + match[2]
+    with open(DATA_FILE, "w") as file:
+        json.dump(days, file)
+    os.remove(WEBPAGE)
+    print('Done.')
+
+def getData():
+    if os.access(DATA_FILE, os.F_OK):
+        data = []
+        try:
+            with open(DATA_FILE, "r") as file:
+                data = json.load(file)
+            dataDate = strptime(data[0]["date"], DATE_FMT)
+            actualDate = date.today()
+            if dataDate.tm_year == actualDate.year and dataDate.tm_mon == actualDate.month:
+                return data
+            else:
+                print("Data is out of date.")
+        except:
+            print("Data file found, but is unreadable.")
+    else:
+        print("No data file found.")
+
+    downloadData()
+    return getData()
+
+
+
+args = ''.join(sorted([item for item in ''.join(argv[1:]) if item != '-']))
+for arg in args:
+    if ARGS_LIST.find(arg) == -1:
+        print(f"Unknown argument: {arg}.")
+        print(HELP_MSG)
+        exit(1)
+if args.find("h") > -1:
+    print(HELP_MSG)
+    exit(0)
+if args == "" or args.find("a") > -1:
+    args = "scn"
+if args.find("A") > -1:
+    args = "SCN"
+
+data = getData()
+TIME_FMT = "%I:%M %p"
+TIME_DISPLAY_FMT = "%I:%M %p" if(args.find("w") > -1) else "%H:%M"
+
+if args.islower():
+    # Only today's data--otherwise, the whole month
+    data = [data[date.today().day - 1]]
+
+args = args.lower()
+
+for times in data:
+    sunrise = mktime(strptime(times["sunrise"], TIME_FMT))
+    sunset = mktime(strptime(times["sunset"], TIME_FMT))
+    secsPerHr = (sunset - sunrise) / 12
+    minsPerHr, remainder = divmod(secsPerHr, 60)
+
+    todayStr = ' (Today)' if times['date'] == strftime(DATE_FMT, date.today().timetuple()) else ''
+    print(f"On {times['date']}{todayStr}:")
+    print(f"There are {minsPerHr:.0f} minutes and {remainder:.0f} seconds to each hour.")
+
+    if args.find("s") > -1:
+        print("The sun rises at %s and sets at %s"% (strftime(TIME_DISPLAY_FMT, localtime(sunrise)), strftime(TIME_DISPLAY_FMT, localtime(sunset))))
+    if args.find("t") > -1:
+        dawn, dusk = [strftime(TIME_DISPLAY_FMT, localtime(mktime(strptime(times[key], TIME_FMT)))) for key in ['dawn', 'dusk']]
+        print("First light is at %s and last light at %s."% (dawn, dusk))
+    if args.find("p") > -1:
+        myTimeSecs = sunrise
+        print("Laudes:", strftime(TIME_DISPLAY_FMT, localtime(myTimeSecs)))
+        myTimeSecs += secsPerHr
+        print("Prima:", strftime(TIME_DISPLAY_FMT, localtime(myTimeSecs)))
+        myTimeSecs += secsPerHr * 2
+        print("Tertia:", strftime(TIME_DISPLAY_FMT, localtime(myTimeSecs)))
+
+        for hora in ['Sexta', 'Nona', 'Vesperae']:
+            myTimeSecs += secsPerHr * 3
+            print(f"{hora}:", strftime(TIME_DISPLAY_FMT, localtime(myTimeSecs)))
+    if args.find("c") > -1:
+        horas = ['Aurora', 'Prima', 'Secunda', 'Tertia', 'Quarta', 'Quinta', 'Sexta', 'Septima',
+                'Octava', 'Nona', 'Decima', 'Undecima', 'Crepusculum']
+        myTimeSecs = sunrise
+        for hora in horas:
+            print(f"{hora}:", strftime(TIME_DISPLAY_FMT, localtime(myTimeSecs)))
+            myTimeSecs += secsPerHr
+    if args.find("n") > -1:
+        print("The noonday devil attacks between"
+                , strftime(TIME_DISPLAY_FMT, localtime(sunrise + secsPerHr * 4))
+                , f"and {strftime(TIME_DISPLAY_FMT, localtime(sunrise + secsPerHr * 8))}.")
+
+exit(0)
