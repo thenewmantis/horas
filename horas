@@ -39,6 +39,8 @@ def downloadData():
                 'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.17 (KHTML, like Gecko) Chrome/24.0.1312.52 Safari/537.17'
             }
     )
+    if not os.path.exists(TMP_DIR):
+        os.mkdir(TMP_DIR)
     with open(WEBPAGE, 'w') as file:
         file.write(urllib.request.urlopen(req).read().decode('UTF-8'))
     print('Download successful. Recording data as an object...')
@@ -77,6 +79,8 @@ def recordData():
                     match = re.search(TIME_RE, line)
                     if match:
                         lastTimeFound = match[1] + match[2]
+    if not os.path.exists(CACHE_DIR):
+        os.mkdir(CACHE_DIR)
     with open(DATA_FILE, "w") as file:
         json.dump(days, file)
     os.remove(WEBPAGE)
